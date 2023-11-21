@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # scJoint
 
 scJoint is a transfer learning method to integrate atlas-scale, heterogeneous collections of scRNA-seq and scATAC-seq data. scJoint leverages information from annotated scRNA-seq data in a semi-supervised framework and uses a neural network to simultaneously train labeled and unlabeled data, enabling label transfer and joint visualization in an integrative framework. For more information, please see scJoint manuscript: https://doi.org/10.1101/2020.12.31.424916.
@@ -137,3 +138,7 @@ scJoint is also available via superbio: https://app.superbio.ai/apps/114/.
 Lin, Y., Wu, T.Y., Wan, S., Yang, J.Y., Wong, W.H. and Wang, Y.X., 2022. scJoint integrates atlas-scale single-cell RNA-seq and ATAC-seq data with transfer learning. Nature Biotechnology, 40(5), pp.703-710.
 
 
+=======
+# scTGCN
+Integration of unpaired single cell omics data by deep transfer graph convolutional network
+>>>>>>> 2a800c4002b59966c3f1420fc898a456e5664b4d
