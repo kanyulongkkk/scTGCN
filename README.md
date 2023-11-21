@@ -27,8 +27,6 @@ python main.py
 The output will be saved in `./output` folder.
 
 
-
-=======
 # scTGCN
 Integration of unpaired single cell omics data by deep transfer graph convolutional network
 
