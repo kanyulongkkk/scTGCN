@@ -15,8 +15,7 @@ class Net_encoder(nn.Module):
 
         self.encoder = nn.Sequential(
             nn.Linear(self.input_size, 64),
-            nn.ReLU(),
-            nn.LayerNorm(64)
+            
         )
 
     def forward(self, data):
