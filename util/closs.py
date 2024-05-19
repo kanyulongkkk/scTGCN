@@ -5,6 +5,54 @@ from torch.autograd import Variable
 import numpy as np
 
 
+class MMD_loss(nn.Module):
+    def __init__(self, kernel_type='linear', kernel_mul=2.0, kernel_num=5):
+        super(MMD_loss, self).__init__()
+        self.kernel_num = kernel_num
+        self.kernel_mul = kernel_mul
+        self.fix_sigma = None
+        self.kernel_type = kernel_type
+
+    def guassian_kernel(self, source, target, kernel_mul=2.0, kernel_num=5, fix_sigma=None):
+        n_samples = int(source.size()[0]) + int(target.size()[0])
+        total = torch.cat([source, target], dim=0)
+        total0 = total.unsqueeze(0).expand(
+            int(total.size(0)), int(total.size(0)), int(total.size(1)))
+        total1 = total.unsqueeze(1).expand(
+            int(total.size(0)), int(total.size(0)), int(total.size(1)))
+        L2_distance = ((total0-total1)**2).sum(2)
+        if fix_sigma:
+            bandwidth = fix_sigma
+        else:
+            bandwidth = torch.sum(L2_distance.data) / (n_samples**2-n_samples)
+        bandwidth /= kernel_mul ** (kernel_num // 2)
+        bandwidth_list = [bandwidth * (kernel_mul**i)
+                          for i in range(kernel_num)]
+        kernel_val = [torch.exp(-L2_distance / bandwidth_temp)
+                      for bandwidth_temp in bandwidth_list]
+        return sum(kernel_val)
+
+    def linear_mmd(self, X, Y):
+        delta = X.mean(axis=0) - Y.mean(axis=0)
+        loss = delta.dot(delta.T)
+        return loss
+
+    def forward(self, source, target):
+        if self.kernel_type == 'linear':
+            return self.linear_mmd(source, target)
+        elif self.kernel_type == 'rbf':
+            batch_size = int(source.size()[0])
+            kernels = self.guassian_kernel(
+                source, target, kernel_mul=self.kernel_mul, kernel_num=self.kernel_num, fix_sigma=self.fix_sigma)
+            with torch.no_grad():
+                XX = torch.mean(kernels[:batch_size, :batch_size])
+                YY = torch.mean(kernels[batch_size:, batch_size:])
+                XY = torch.mean(kernels[:batch_size, batch_size:])
+                YX = torch.mean(kernels[batch_size:, :batch_size])
+                loss = torch.mean(XX + YY - XY - YX)
+            return loss
+
+
 def _one_hot(tensor, num):
     b = list(tensor.size())[0]
     onehot = torch.cuda.FloatTensor(b, num).fill_(0)
@@ -21,7 +69,10 @@ class L1regularization(nn.Module):
     def forward(self, model):
         regularization_loss = 0.
         for param in model.parameters():
-            regularization_loss += torch.mean(abs(param)) * self.weight_decay
+         # 修改
+
+            regularization_loss += torch.mean(pow(param, 2)) * \
+                self.weight_decay
 
         return regularization_loss
 
@@ -50,50 +101,85 @@ def cosine_sim(x, y):
     return sim
 
 
+def cosine_him(x, y):
+    x = x / torch.norm(x, p=2, dim=1, keepdim=True)
+    y = y / torch.norm(y, p=2, dim=1, keepdim=True)
+    him = torch.matmul(x, torch.transpose(y, 0, 1))
+    return him
+
+
 class EncodingLoss(nn.Module):
-    def __init__(self, dim=64, p =0.8, use_gpu = True):
+    def __init__(self, dim=64, p=0.99, use_gpu=True):
         super(EncodingLoss, self).__init__()
         if use_gpu:
-            self.identity_matrix = torch.tensor(np.identity(dim)).float().cuda()
+            self.identity_matrix = torch.tensor(
+                np.identity(dim)).float().cuda()
         else:
             self.identity_matrix = torch.tensor(np.identity(dim)).float()
-        self.p = p 
+        self.p = p
         self.dim = dim
-        
+        self._mmd_loss = MMD_loss(kernel_type="rbf")  # 可以替换为linear
+
     def forward(self, atac_embeddings, rna_embeddings):
         # rna
         rna_embedding_cat = rna_embeddings[0]
-        rna_reduction_loss = reduction_loss(rna_embeddings[0], self.identity_matrix, self.dim)
-        for i in range(1, len(rna_embeddings)):                
-            rna_embedding_cat = torch.cat([rna_embedding_cat, rna_embeddings[i]], 0)            
-            rna_reduction_loss += reduction_loss(rna_embeddings[i], self.identity_matrix, self.dim)    
-                
+        rna_reduction_loss = reduction_loss(
+            rna_embeddings[0], self.identity_matrix, self.dim)
+        for i in range(1, len(rna_embeddings)):
+            rna_embedding_cat = torch.cat(
+                [rna_embedding_cat, rna_embeddings[i]], 0)
+            rna_reduction_loss += reduction_loss(
+                rna_embeddings[i], self.identity_matrix, self.dim)
         rna_reduction_loss /= len(rna_embeddings)
-        
+
         # atac
-        atac_reduction_loss = reduction_loss(atac_embeddings[0], self.identity_matrix, self.dim)
+        atac_embedding_cat = atac_embeddings[0]
+        atac_reduction_loss = reduction_loss(
+            atac_embeddings[0], self.identity_matrix, self.dim)
         for i in range(1, len(atac_embeddings)):
-            atac_reduction_loss +=  reduction_loss(atac_embeddings[i], self.identity_matrix, self.dim)
-                                
-
+            atac_embedding_cat = torch.cat(
+                [atac_embedding_cat, atac_embeddings[i]], 0)
+            atac_reduction_loss += reduction_loss(
+                atac_embeddings[i], self.identity_matrix, self.dim)
         atac_reduction_loss /= len(atac_embeddings)
-        
-        # cosine similarity loss    
-        top_k_sim = torch.topk(
-            torch.max(cosine_sim(atac_embeddings[0], rna_embedding_cat), dim=1)[0],
-            int(atac_embeddings[0].shape[0] * self.p))
-        sim_loss = torch.mean(top_k_sim[0])
-        
-        for i in range(1, len(atac_embeddings)):
-            top_k_sim = torch.topk(
-                torch.max(cosine_sim(atac_embeddings[i], rna_embedding_cat), dim=1)[0],
-                int(atac_embeddings[i].shape[0] * self.p))
-            sim_loss += torch.mean(top_k_sim[0])
-        
-        sim_loss = sim_loss/len(atac_embeddings)
-        
 
-        loss = rna_reduction_loss + atac_reduction_loss - sim_loss
+        print(rna_embedding_cat.shape, atac_embedding_cat.shape, len(
+            rna_embeddings), len(atac_embeddings))
+        # cosine similarity loss
+        top_k_sim = torch.topk(
+             torch.max(cosine_sim(atac_embeddings[0], rna_embedding_cat), dim=1)[0],
+             int(atac_embeddings[0].shape[0] * self.p))
+        sim_loss = torch.mean(top_k_sim[0])
+
+        for i in range(1, len(atac_embeddings)):
+             top_k_sim = torch.topk(
+                 torch.max(cosine_sim(atac_embeddings[i], rna_embedding_cat), dim=1)[0],
+                 int(atac_embeddings[i].shape[0] * self.p))
+             sim_loss += torch.mean(top_k_sim[0])
+
+        sim_loss = sim_loss/len(atac_embeddings)
+        # 矩阵2范数 Loss
+
+        top_k_him = torch.topk(
+            torch.max(cosine_him(
+                atac_embeddings[0], rna_embedding_cat), dim=1)[0],
+            int(atac_embeddings[0].shape[0] * self.p))
+        him_loss = torch.mean(top_k_him[0])
+        for i in range(1, len(atac_embeddings)):
+
+            top_k_him = torch.topk(
+                torch.max(cosine_him(
+                    atac_embeddings[i], rna_embedding_cat), dim=1,)[0],
+                int(atac_embeddings[i].shape[0] * self.p))
+            him_loss += torch.mean(top_k_him[0])
+        him_loss = him_loss/len(atac_embeddings)
+
+        # mmd loss
+
+        mmd_loss = self._mmd_loss(atac_embedding_cat, rna_embedding_cat)
+        mmd_loss = mmd_loss/len(atac_embeddings)
+        loss =rna_reduction_loss + atac_reduction_loss - ((him_loss + sim_loss) / 2)
+        #loss = rna_reduction_loss + atac_reduction_loss -him_loss - mmd_loss
         return loss
 
 
@@ -105,9 +191,11 @@ class CenterLoss(nn.Module):
         self.use_gpu = use_gpu
 
         if self.use_gpu:
-            self.centers = nn.Parameter(torch.randn(self.num_classes, self.feat_dim).cuda())
+            self.centers = nn.Parameter(torch.randn(
+                self.num_classes, self.feat_dim).cuda())
         else:
-            self.centers = nn.Parameter(torch.randn(self.num_classes, self.feat_dim))
+            self.centers = nn.Parameter(
+                torch.randn(self.num_classes, self.feat_dim))
 
     def forward(self, embeddings, labels):
         center_loss = 0
@@ -115,19 +203,21 @@ class CenterLoss(nn.Module):
             label = labels[i].long()
             batch_size = x.size(0)
             distmat = torch.pow(x, 2).sum(dim=1, keepdim=True).expand(batch_size, self.num_classes) + \
-                      torch.pow(self.centers, 2).sum(dim=1, keepdim=True).expand(self.num_classes, batch_size).t()
+                torch.pow(self.centers, 2).sum(dim=1, keepdim=True).expand(
+                    self.num_classes, batch_size).t()
             distmat.addmm_(1, -2, x, self.centers.t())
             distmat = torch.sqrt(distmat)
 
             classes = torch.arange(self.num_classes).long()
-            if self.use_gpu: classes = classes.cuda()
+            if self.use_gpu:
+                classes = classes.cuda()
             label = label.unsqueeze(1).expand(batch_size, self.num_classes)
             mask = label.eq(classes.expand(batch_size, self.num_classes))
 
             dist = distmat * mask.float()
             center_loss += torch.mean(dist.clamp(min=1e-12, max=1e+12))
-        
-        center_loss = center_loss/len(embeddings)
+
+        center_loss = center_loss/(len(embeddings)**2)
         return center_loss
 
 
@@ -138,4 +228,5 @@ class CellLoss(nn.Module):
     def forward(self, rna_cell_out, rna_cell_label):
         rna_cell_loss = F.cross_entropy(rna_cell_out, rna_cell_label.long())
         return rna_cell_loss
+
 
