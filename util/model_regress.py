@@ -22,7 +22,7 @@ class Net_encoder(nn.Module):
     def forward(self, data):
         data = data.float().view(-1, self.input_size)
         embedding = self.encoder(data)
-        data = self.decoder(embedding)
+        
         return embedding
 
 
