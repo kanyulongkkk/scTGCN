@@ -20,14 +20,13 @@ class Net_encoder(nn.Module):
 class GNN(nn.Module):
     def __init__(self, num_of_class):
         super(GNN, self).__init__()
+        self.init_conv = GATv2Conv(64,1,heads=1)
         self.num_heads = 16  # Fixed number of attention heads
         self.gat = GATv2Conv(64, 1024, heads=self.num_heads)
         self.out = Linear(1024 * self.num_heads, num_of_class)  # Adjust output layer dimensions
 
     def forward(self, x, edge_index):
-        h = self.gat(x, edge_index)
-        embedding = torch.relu(h)
-        z = self.out(embedding)
+        x = self.init_conv(x,edge_list)
         return z
 
 class Net_cell(nn.Module):
