@@ -179,7 +179,6 @@ class EncodingLoss(nn.Module):
         mmd_loss = self._mmd_loss(atac_embedding_cat, rna_embedding_cat)
         mmd_loss = mmd_loss/len(atac_embeddings)
         loss =rna_reduction_loss + atac_reduction_loss - ((him_loss + sim_loss) / 2)
-        #loss = rna_reduction_loss + atac_reduction_loss -him_loss - mmd_loss
         return loss
 
 
